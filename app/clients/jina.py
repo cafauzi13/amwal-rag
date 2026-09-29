@@ -9,7 +9,7 @@ from typing import Any, Iterable, Iterator, Literal, Sequence
 import httpx
 import numpy as np
 
-from app.clients import APIKeyError, APIRequestError, ResponseFormatError
+from app.clients import APIKeyError, APIRequestError, DeadlineExceeded, ResponseFormatError, time_left
 from app.config import EMBED_DIM, get_settings
 
 EMBED_URL = "https://api.jina.ai/v1/embeddings"
@@ -55,12 +55,18 @@ def _backoff(schedule: tuple[float, ...], attempt: int) -> float:
 
 @dataclass(frozen=True)
 class RetryPolicy:
-    """How _post retries. max_wait: give up instead of sleeping longer (e.g. a long Retry-After)."""
+    """How _post retries.
+
+    max_wait: give up instead of sleeping longer (e.g. a long Retry-After).
+    deadline: time.monotonic() by which the whole call must finish; every HTTP timeout
+    and retry sleep is cut to fit, so a worker thread never outlives its request budget.
+    """
 
     max_retries: int
     rate_limit_backoff: tuple[float, ...]
     server_backoff: tuple[float, ...]
     max_wait: float | None = None
+    deadline: float | None = None
 
 
 def build_policy() -> RetryPolicy:
@@ -69,22 +75,25 @@ def build_policy() -> RetryPolicy:
     return RetryPolicy(s.jina_max_retries, s.jina_rate_limit_backoff, s.jina_server_backoff)
 
 
-def chat_policy() -> RetryPolicy:
+def chat_policy(deadline: float | None = None) -> RetryPolicy:
     """One short retry for the /chat path; never waits on a long Retry-After."""
     s = get_settings()
     delay = (s.chat_retry_delay,)
-    return RetryPolicy(s.chat_max_retries, delay, delay, max_wait=max(s.chat_retry_delay, 2.0))
+    return RetryPolicy(s.chat_max_retries, delay, delay, max_wait=max(s.chat_retry_delay, 2.0), deadline=deadline)
 
 
 def _post(url: str, payload: dict[str, Any], retry: RetryPolicy | None = None) -> Any:
     """POST with retries: 429 honours Retry-After, 5xx/network errors use a short backoff."""
     policy = retry or build_policy()
     client = _get_client()
+    http_timeout = get_settings().http_timeout
     attempt = 0
     while True:
+        timeout = time_left(policy.deadline, http_timeout)
         try:
-            resp = client.post(url, json=payload)
+            resp = client.post(url, json=payload, timeout=timeout)
         except httpx.TransportError as exc:  # timeouts, connection resets, DNS
+            time_left(policy.deadline, http_timeout)  # a timeout cut short by the deadline -> DeadlineExceeded
             if attempt >= policy.max_retries:
                 raise APIRequestError(
                     f"Jina: gagal terhubung setelah {attempt + 1} percobaan ({type(exc).__name__}: {exc})"
@@ -94,14 +103,14 @@ def _post(url: str, payload: dict[str, Any], retry: RetryPolicy | None = None) -
         else:
             status = resp.status_code
             if status == 401:
-                raise APIKeyError("Jina: API key salah/kosong (HTTP 401).")
+                raise APIKeyError("Jina: API key salah/kosong (HTTP 401).", status)
             if status != 429 and status < 500:
                 if resp.is_error:
-                    raise APIRequestError(f"Jina HTTP {status}: {resp.text[:500]}")
+                    raise APIRequestError(f"Jina HTTP {status}: {resp.text[:500]}", status)
                 return resp.json()
             if attempt >= policy.max_retries:
                 raise APIRequestError(
-                    f"Jina HTTP {status} setelah {attempt + 1} percobaan: {resp.text[:500]}"
+                    f"Jina HTTP {status} setelah {attempt + 1} percobaan: {resp.text[:500]}", status
                 )
             if status == 429:
                 delay = _retry_after(resp)
@@ -110,8 +119,10 @@ def _post(url: str, payload: dict[str, Any], retry: RetryPolicy | None = None) -
             else:
                 delay = _backoff(policy.server_backoff, attempt)
             if policy.max_wait is not None and delay > policy.max_wait:
-                raise APIRequestError(f"Jina HTTP {status}: diminta menunggu {delay:.0f}s, terlalu lama")
+                raise APIRequestError(f"Jina HTTP {status}: diminta menunggu {delay:.0f}s, terlalu lama", status)
             logger.warning("Jina HTTP %d, retry in %.1fs", status, delay)
+        if delay >= time_left(policy.deadline, float("inf")):
+            raise DeadlineExceeded("anggaran waktu habis sebelum retry Jina")
         time.sleep(delay)
         attempt += 1
 

@@ -139,11 +139,14 @@ class Retrieval:
     rerank_fallback: bool
 
 
-def retrieve(question: str) -> Retrieval:
-    """Embed -> FAISS top-k -> rerank top-n (fallback: FAISS top-n). No LLM call."""
+def retrieve(question: str, deadline: float | None = None) -> Retrieval:
+    """Embed -> FAISS top-k -> rerank top-n (fallback: FAISS top-n). No LLM call.
+
+    deadline: time.monotonic() by which all upstream calls must finish (None = no limit).
+    """
     s = get_settings()
     idx = load_index()
-    policy = chat_policy()
+    policy = chat_policy(deadline)
 
     t0 = time.perf_counter()
     candidates = idx.search(embed(question, "retrieval.query", retry=policy), s.retrieve_top_k)
@@ -156,7 +159,9 @@ def retrieve(question: str) -> Retrieval:
             raise ValueError(f"rerank mengembalikan {len(ids)} hasil unik, diharapkan {n}")
         fallback = False
     except Exception as exc:  # noqa: BLE001 - rerank must never fail /chat
-        logger.warning("Rerank gagal (%s: %s); memakai top-%d FAISS", type(exc).__name__, exc, n)
+        # class and HTTP status only: the message can quote the upstream body (and thus the question)
+        logger.warning("Rerank gagal (%s, HTTP %s); memakai top-%d FAISS",
+                       type(exc).__name__, getattr(exc, "status_code", None), n)
         ids, fallback = candidates[:n], True
     t2 = time.perf_counter()
     logger.info("retrieve: embed+faiss %.0f ms, rerank %.0f ms%s",
@@ -232,11 +237,12 @@ def _sources(idx: RagIndex, ids: list[int], limit: int) -> list[dict[str, Any]]:
     return out
 
 
-def answer(question: str) -> dict[str, Any]:
+def answer(question: str, deadline: float | None = None) -> dict[str, Any]:
     """Answer one question (single-turn). Returns {"answer": str, "sources": [...]}.
 
     Raises ValueError for an invalid question, IndexNotReadyError if the index is not
-    usable, and app.clients.APIRequestError when Jina embed or DeepSeek is unavailable.
+    usable, app.clients.APIRequestError when Jina embed or DeepSeek is unavailable, and
+    app.clients.DeadlineExceeded when the deadline (time.monotonic()) runs out.
     """
     q = question.strip()
     if not MIN_QUESTION_CHARS <= len(q) <= MAX_QUESTION_CHARS:
@@ -244,12 +250,13 @@ def answer(question: str) -> dict[str, Any]:
 
     s = get_settings()
     idx = load_index()
-    found = retrieve(q)
+    found = retrieve(q, deadline)
     t0 = time.perf_counter()
     result = chat(
         SYSTEM_PROMPT,
         f"Konteks Dokumen:\n{_context(idx, found.ids)}\n\nPertanyaan: {q}",
         max_retries=s.chat_max_retries,
+        deadline=deadline,
     )
     logger.info("llm: %.0f ms, token prompt=%d completion=%d",
                 (time.perf_counter() - t0) * 1000, result.prompt_tokens, result.completion_tokens)
