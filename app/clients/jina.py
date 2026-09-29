@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import Any, Literal, Sequence
+from typing import Any, Iterable, Iterator, Literal, Sequence
 
 import httpx
 import numpy as np
@@ -90,15 +90,56 @@ def _post(url: str, payload: dict[str, Any]) -> Any:
         attempt += 1
 
 
-def _pacing_delay(data: Any, batch: Sequence[str], elapsed: float, target_tpm: int) -> float:
+def _batch_tokens(data: Any, batch: Sequence[str]) -> tuple[int, bool]:
+    """Tokens used by one embed call: (count, exact). Falls back to ~4 chars per token."""
+    usage = data.get("usage") if isinstance(data, dict) else None
+    tokens = usage.get("total_tokens") if isinstance(usage, dict) else None
+    if isinstance(tokens, (int, float)):
+        return int(tokens), True
+    return sum(len(t) for t in batch) // 4, False
+
+
+def _pacing_delay(tokens: int, elapsed: float, target_tpm: int) -> float:
     """Pause needed before the next batch to stay under target_tpm (0 disables pacing)."""
     if target_tpm <= 0:
         return 0.0
-    usage = data.get("usage") if isinstance(data, dict) else None
-    tokens = usage.get("total_tokens") if isinstance(usage, dict) else None
-    if not isinstance(tokens, (int, float)):
-        tokens = sum(len(t) for t in batch) / 4  # rough estimate: ~4 chars per token
     return max(tokens / target_tpm * 60 - elapsed, 0.0)
+
+
+def iter_embed_batches(
+    batches: Iterable[Sequence[str]], task: Task
+) -> Iterator[tuple[np.ndarray, int, bool]]:
+    """Embed pre-split batches, pacing between them (JINA_TARGET_TPM).
+
+    Yields (L2-normalised float32 array, tokens, tokens_exact) per batch, so callers
+    can checkpoint each batch without losing the pacing.
+    """
+    s = get_settings()
+    pause = 0.0
+    for raw in batches:
+        batch = list(raw)
+        if pause > 0:
+            logger.info("Jina pacing: jeda %.1fs (target %d TPM)", pause, s.jina_target_tpm)
+            time.sleep(pause)
+        began = time.perf_counter()
+        data = _post(
+            EMBED_URL,
+            {"model": s.jina_embed_model, "task": task, "input": batch, "truncate": True},
+        )
+        tokens, exact = _batch_tokens(data, batch)
+        pause = _pacing_delay(tokens, time.perf_counter() - began, s.jina_target_tpm)
+        try:
+            items = sorted(data["data"], key=lambda d: d["index"])
+            vectors = [item["embedding"] for item in items]
+        except (KeyError, TypeError) as exc:
+            raise ResponseFormatError(f"Jina embed: format respons tak dikenal ({exc!r})", data) from exc
+        if len(items) != len(batch):
+            raise ResponseFormatError(
+                f"Jina embed: {len(batch)} input tapi {len(items)} embedding kembali", data
+            )
+        arr = np.asarray(vectors, dtype=np.float32)
+        norms = np.linalg.norm(arr, axis=1, keepdims=True)
+        yield arr / np.clip(norms, 1e-12, None), tokens, exact
 
 
 def embed(
@@ -110,34 +151,9 @@ def embed(
     if not texts:
         return np.empty((0, EMBED_DIM), dtype=np.float32)
 
-    s = get_settings()
-    size = batch_size or s.jina_embed_batch_size
-    vectors: list[list[float]] = []
-    pause = 0.0
-    for start in range(0, len(texts), size):
-        if pause > 0:
-            logger.info("Jina pacing: jeda %.1fs (target %d TPM)", pause, s.jina_target_tpm)
-            time.sleep(pause)
-        batch = list(texts[start : start + size])
-        began = time.perf_counter()
-        data = _post(
-            EMBED_URL,
-            {"model": s.jina_embed_model, "task": task, "input": batch, "truncate": True},
-        )
-        pause = _pacing_delay(data, batch, time.perf_counter() - began, s.jina_target_tpm)
-        try:
-            items = sorted(data["data"], key=lambda d: d["index"])
-            vectors.extend(item["embedding"] for item in items)
-        except (KeyError, TypeError) as exc:
-            raise ResponseFormatError(f"Jina embed: format respons tak dikenal ({exc!r})", data) from exc
-        if len(items) != len(batch):
-            raise ResponseFormatError(
-                f"Jina embed: {len(batch)} input tapi {len(items)} embedding kembali", data
-            )
-
-    arr = np.asarray(vectors, dtype=np.float32)
-    norms = np.linalg.norm(arr, axis=1, keepdims=True)
-    return arr / np.clip(norms, 1e-12, None)
+    size = batch_size or get_settings().jina_embed_batch_size
+    batches = (texts[start : start + size] for start in range(0, len(texts), size))
+    return np.vstack([arr for arr, _, _ in iter_embed_batches(batches, task)])
 
 
 def rerank(query: str, docs: Sequence[str], top_n: int | None = None) -> list[tuple[int, float]]:
