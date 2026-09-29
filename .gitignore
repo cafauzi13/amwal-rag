@@ -4,6 +4,10 @@
 # Build artifacts (rebuild with build_index.py)
 index/
 
+# Evaluation data and results stay local; only the schema is shared
+data/eval/*
+!data/eval/SCHEMA.md
+
 # Python
 venv/
 .venv/

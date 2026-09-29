@@ -132,9 +132,10 @@ def index_status() -> tuple[bool, str | None]:
 
 @dataclass(frozen=True)
 class Retrieval:
-    """Final chunk ids (best first) and whether rerank fell back to FAISS order."""
+    """Final chunk ids (best first), FAISS candidates before rerank, and whether rerank fell back."""
 
     ids: list[int]
+    candidates: list[int]
     rerank_fallback: bool
 
 
@@ -160,7 +161,7 @@ def retrieve(question: str) -> Retrieval:
     t2 = time.perf_counter()
     logger.info("retrieve: embed+faiss %.0f ms, rerank %.0f ms%s",
                 (t1 - t0) * 1000, (t2 - t1) * 1000, " (fallback)" if fallback else "")
-    return Retrieval(ids, fallback)
+    return Retrieval(ids, candidates, fallback)
 
 
 def _context(idx: RagIndex, ids: list[int]) -> str:
