@@ -39,10 +39,20 @@ def _get_client() -> OpenAI:
     return _client
 
 
-def chat(system_prompt: str, user_prompt: str, temperature: float | None = None) -> ChatResult:
-    """Send one system+user turn to DeepSeek and return the answer with token usage."""
+def chat(
+    system_prompt: str,
+    user_prompt: str,
+    temperature: float | None = None,
+    max_retries: int | None = None,
+) -> ChatResult:
+    """Send one system+user turn to DeepSeek and return the answer with token usage.
+
+    max_retries overrides LLM_MAX_RETRIES for this call (the /chat path uses CHAT_MAX_RETRIES).
+    """
     s = get_settings()
     client = _get_client()
+    if max_retries is not None:
+        client = client.with_options(max_retries=max_retries)
     try:
         resp = client.chat.completions.create(
             model=s.deepseek_model,

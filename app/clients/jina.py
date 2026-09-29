@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 import time
+from dataclasses import dataclass
 from typing import Any, Iterable, Iterator, Literal, Sequence
 
 import httpx
@@ -52,20 +53,43 @@ def _backoff(schedule: tuple[float, ...], attempt: int) -> float:
     return schedule[min(attempt, len(schedule) - 1)]
 
 
-def _post(url: str, payload: dict[str, Any]) -> Any:
-    """POST with retries: 429 honours Retry-After, 5xx/network errors use a short backoff."""
+@dataclass(frozen=True)
+class RetryPolicy:
+    """How _post retries. max_wait: give up instead of sleeping longer (e.g. a long Retry-After)."""
+
+    max_retries: int
+    rate_limit_backoff: tuple[float, ...]
+    server_backoff: tuple[float, ...]
+    max_wait: float | None = None
+
+
+def build_policy() -> RetryPolicy:
+    """Patient retries for bulk jobs (build_index): 429 -> 5/15/30s, 5xx/network -> 1/2/4s."""
     s = get_settings()
+    return RetryPolicy(s.jina_max_retries, s.jina_rate_limit_backoff, s.jina_server_backoff)
+
+
+def chat_policy() -> RetryPolicy:
+    """One short retry for the /chat path; never waits on a long Retry-After."""
+    s = get_settings()
+    delay = (s.chat_retry_delay,)
+    return RetryPolicy(s.chat_max_retries, delay, delay, max_wait=max(s.chat_retry_delay, 2.0))
+
+
+def _post(url: str, payload: dict[str, Any], retry: RetryPolicy | None = None) -> Any:
+    """POST with retries: 429 honours Retry-After, 5xx/network errors use a short backoff."""
+    policy = retry or build_policy()
     client = _get_client()
     attempt = 0
     while True:
         try:
             resp = client.post(url, json=payload)
         except httpx.TransportError as exc:  # timeouts, connection resets, DNS
-            if attempt >= s.jina_max_retries:
+            if attempt >= policy.max_retries:
                 raise APIRequestError(
                     f"Jina: gagal terhubung setelah {attempt + 1} percobaan ({type(exc).__name__}: {exc})"
                 ) from exc
-            delay = _backoff(s.jina_server_backoff, attempt)
+            delay = _backoff(policy.server_backoff, attempt)
             logger.warning("Jina network error (%s), retry in %.1fs", type(exc).__name__, delay)
         else:
             status = resp.status_code
@@ -75,16 +99,18 @@ def _post(url: str, payload: dict[str, Any]) -> Any:
                 if resp.is_error:
                     raise APIRequestError(f"Jina HTTP {status}: {resp.text[:500]}")
                 return resp.json()
-            if attempt >= s.jina_max_retries:
+            if attempt >= policy.max_retries:
                 raise APIRequestError(
                     f"Jina HTTP {status} setelah {attempt + 1} percobaan: {resp.text[:500]}"
                 )
             if status == 429:
                 delay = _retry_after(resp)
                 if delay is None:
-                    delay = _backoff(s.jina_rate_limit_backoff, attempt)
+                    delay = _backoff(policy.rate_limit_backoff, attempt)
             else:
-                delay = _backoff(s.jina_server_backoff, attempt)
+                delay = _backoff(policy.server_backoff, attempt)
+            if policy.max_wait is not None and delay > policy.max_wait:
+                raise APIRequestError(f"Jina HTTP {status}: diminta menunggu {delay:.0f}s, terlalu lama")
             logger.warning("Jina HTTP %d, retry in %.1fs", status, delay)
         time.sleep(delay)
         attempt += 1
@@ -107,7 +133,7 @@ def _pacing_delay(tokens: int, elapsed: float, target_tpm: int) -> float:
 
 
 def iter_embed_batches(
-    batches: Iterable[Sequence[str]], task: Task
+    batches: Iterable[Sequence[str]], task: Task, retry: RetryPolicy | None = None
 ) -> Iterator[tuple[np.ndarray, int, bool]]:
     """Embed pre-split batches, pacing between them (JINA_TARGET_TPM).
 
@@ -125,6 +151,7 @@ def iter_embed_batches(
         data = _post(
             EMBED_URL,
             {"model": s.jina_embed_model, "task": task, "input": batch, "truncate": True},
+            retry,
         )
         tokens, exact = _batch_tokens(data, batch)
         pause = _pacing_delay(tokens, time.perf_counter() - began, s.jina_target_tpm)
@@ -143,7 +170,10 @@ def iter_embed_batches(
 
 
 def embed(
-    texts: str | Sequence[str], task: Task, batch_size: int | None = None
+    texts: str | Sequence[str],
+    task: Task,
+    batch_size: int | None = None,
+    retry: RetryPolicy | None = None,
 ) -> np.ndarray:
     """Embed texts in sequential batches; returns L2-normalised float32 array of shape (n, dim)."""
     if isinstance(texts, str):
@@ -153,10 +183,12 @@ def embed(
 
     size = batch_size or get_settings().jina_embed_batch_size
     batches = (texts[start : start + size] for start in range(0, len(texts), size))
-    return np.vstack([arr for arr, _, _ in iter_embed_batches(batches, task)])
+    return np.vstack([arr for arr, _, _ in iter_embed_batches(batches, task, retry)])
 
 
-def rerank(query: str, docs: Sequence[str], top_n: int | None = None) -> list[tuple[int, float]]:
+def rerank(
+    query: str, docs: Sequence[str], top_n: int | None = None, retry: RetryPolicy | None = None
+) -> list[tuple[int, float]]:
     """Rerank docs against query; returns [(original_doc_index, score), ...] best first."""
     if not docs:
         return []
@@ -171,6 +203,7 @@ def rerank(query: str, docs: Sequence[str], top_n: int | None = None) -> list[tu
             "top_n": n,
             "return_documents": False,
         },
+        retry,
     )
     return _parse_rerank(data)
 

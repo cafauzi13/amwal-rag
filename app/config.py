@@ -14,6 +14,11 @@ INDEX_DIR = ROOT_DIR / "index"
 CHUNKS_PATH = DATA_DIR / "chunks.jsonl"
 CLEANED_DIR = DATA_DIR / "cleaned"  # cleaned text per document, with [Hal. N] markers
 
+# Files inside INDEX_DIR, written by scripts/build_index.py
+INDEX_FILE = "faiss.index"
+META_FILE = "meta.jsonl"
+INFO_FILE = "build_info.json"
+
 EMBED_DIM = 1024  # jina-embeddings-v5-text-small
 
 
@@ -46,6 +51,10 @@ class Settings:
     jina_server_backoff: tuple[float, ...]
     jina_target_tpm: int  # pacing between embed batches; 0 = off
 
+    # /chat path: one short retry (build_index keeps the long Jina backoff above)
+    chat_max_retries: int
+    chat_retry_delay: float
+
     # Retrieval
     retrieve_top_k: int
     rerank_top_n: int
@@ -63,7 +72,7 @@ def get_settings() -> Settings:
         deepseek_api_key=env("DEEPSEEK_API_KEY", "").strip(),
         deepseek_base_url=env("DEEPSEEK_BASE_URL", "https://api.deepseek.com"),
         deepseek_model=env("DEEPSEEK_MODEL", "deepseek-v4-flash"),
-        llm_temperature=float(env("LLM_TEMPERATURE", "0.2")),
+        llm_temperature=float(env("LLM_TEMPERATURE", "0")),
         llm_max_retries=int(env("LLM_MAX_RETRIES", "3")),
         jina_api_key=env("JINA_API_KEY", "").strip(),
         jina_embed_model=env("JINA_EMBED_MODEL", "jina-embeddings-v5-text-small"),
@@ -73,6 +82,8 @@ def get_settings() -> Settings:
         jina_rate_limit_backoff=_floats(env("JINA_RATE_LIMIT_BACKOFF", "5,15,30")),
         jina_server_backoff=_floats(env("JINA_SERVER_BACKOFF", "1,2,4")),
         jina_target_tpm=int(env("JINA_TARGET_TPM", "80000")),
+        chat_max_retries=int(env("CHAT_MAX_RETRIES", "1")),
+        chat_retry_delay=float(env("CHAT_RETRY_DELAY", "1.0")),
         retrieve_top_k=int(env("RETRIEVE_TOP_K", "10")),
         rerank_top_n=int(env("RERANK_TOP_N", "3")),
         http_timeout=float(env("HTTP_TIMEOUT", "30")),

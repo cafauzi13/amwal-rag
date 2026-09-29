@@ -14,7 +14,6 @@ Run from the repo root:
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import logging
 import shutil
@@ -27,50 +26,15 @@ from typing import Any
 import faiss
 import numpy as np
 
+from app.chunks import PREFIX, load_chunks, sha256
 from app.clients.jina import iter_embed_batches
-from app.config import CHUNKS_PATH, EMBED_DIM, INDEX_DIR, get_settings
+from app.config import CHUNKS_PATH, EMBED_DIM, INDEX_DIR, INDEX_FILE, INFO_FILE, META_FILE, get_settings
 
-PREFIX = "passage: "  # leftover from the thesis' E5 pipeline; Jina uses the task param
 TASK = "retrieval.passage"
-INDEX_FILE = "faiss.index"
-META_FILE = "meta.jsonl"
-INFO_FILE = "build_info.json"
 
 
 class BuildError(RuntimeError):
     """Build cannot continue; message is shown to the user."""
-
-
-def load_chunks(path: Path, limit: int | None) -> tuple[list[str], list[dict[str, Any]], int]:
-    """Read chunks; returns (texts without prefix, metadata without text, prefixed count)."""
-    texts: list[str] = []
-    metas: list[dict[str, Any]] = []
-    prefixed = 0
-    with path.open(encoding="utf-8") as f:
-        for lineno, line in enumerate(f, start=1):
-            if limit is not None and len(texts) >= limit:
-                break
-            if not line.strip():
-                continue
-            row = json.loads(line)
-            text = row.pop("text", None)
-            if not isinstance(text, str) or not text.strip():
-                raise BuildError(f"{path.name} baris {lineno}: field 'text' kosong/tidak ada")
-            if text.startswith(PREFIX):
-                text = text[len(PREFIX):]
-                prefixed += 1
-            texts.append(text)
-            metas.append(row)
-    return texts, metas, prefixed
-
-
-def sha256(path: Path) -> str:
-    """Hex digest of a file, read in 1 MiB blocks."""
-    h = hashlib.sha256()
-    with path.open("rb") as f:
-        for block in iter(lambda: f.read(1 << 20), b""):
-            h.update(block)
-    return h.hexdigest()
 
 
 def write_atomic(path: Path, write) -> None:
@@ -138,7 +102,10 @@ def build(limit: int | None, fresh: bool) -> int:
     out_dir = INDEX_DIR / "sample" if limit is not None else INDEX_DIR
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    texts, metas, prefixed = load_chunks(CHUNKS_PATH, limit)
+    try:
+        texts, metas, prefixed = load_chunks(CHUNKS_PATH, limit)
+    except ValueError as exc:
+        raise BuildError(str(exc)) from exc
     n = len(texts)
     if n == 0:
         raise BuildError(f"Tidak ada chunk di {CHUNKS_PATH}")
