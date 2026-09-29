@@ -106,8 +106,9 @@ def score_item(item: dict[str, Any], codes_in_corpus: set[str]) -> dict[str, Any
     pasal_locs = [l for l in locs if l.code in codes_in_corpus and l.pasal is not None]
 
     result: dict[str, Any] = {}
-    for n, key in ((3, "top3"), (10, "top10")):
-        got = [(doc_code(x.get("sumber") or ""), x.get("halaman"), x.get("unit") or "") for x in item[key]]
+    # "3f" = FAISS top-3 without rerank (candidates[:3]), to measure what rerank adds
+    for n, ranked in (("3", item["top3"]), ("10", item["top10"]), ("3f", item["top10"][:3])):
+        got = [(doc_code(x.get("sumber") or ""), x.get("halaman"), x.get("unit") or "") for x in ranked]
         got_codes = {c for c, _, _ in got}
         result[f"src@{n}"] = any(c in got_codes for c in gt) if gt else None
         result[f"hal@{n}"] = (
@@ -129,6 +130,9 @@ def score_item(item: dict[str, Any], codes_in_corpus: set[str]) -> dict[str, Any
     return result
 
 
+METRICS = ["src@3", "src@3f", "rec@3", "src@10", "hal@3", "hal@3f", "hal@10", "psl@3", "psl@3f", "psl@10"]
+
+
 def summarise(items: list[dict[str, Any]], scores: list[dict[str, Any]]) -> dict[str, Any]:
     """Aggregate means over assessed items, overall and per domain/kesulitan."""
 
@@ -136,13 +140,12 @@ def summarise(items: list[dict[str, Any]], scores: list[dict[str, Any]]) -> dict
         assessed = [float(v) for v in values if v is not None]
         return (sum(assessed) / len(assessed) if assessed else None), len(assessed)
 
-    metrics = ["src@3", "rec@3", "src@10", "hal@3", "hal@10", "psl@3", "psl@10"]
-    out: dict[str, Any] = {"overall": {m: mean([s[m] for s in scores]) for m in metrics}}
+    out: dict[str, Any] = {"overall": {m: mean([s[m] for s in scores]) for m in METRICS}}
     for field in ("domain", "kesulitan"):
         groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
         for item, s in zip(items, scores):
             groups[item[field]].append(s)
-        out[field] = {g: {m: mean([s[m] for s in ss]) for m in metrics} for g, ss in groups.items()}
+        out[field] = {g: {m: mean([s[m] for s in ss]) for m in METRICS} for g, ss in groups.items()}
     return out
 
 
@@ -159,20 +162,40 @@ def fmt_pct(pair: tuple[float | None, int]) -> str:
 
 
 def print_table(items: list[dict[str, Any]], scores: list[dict[str, Any]]) -> None:
-    print(f"\n{'id':7} {'domain':13} {'kes':6} {'src@3':>5} {'rec@3':>5} {'src@10':>6} "
+    print(f"\n{'id':7} {'domain':13} {'kes':6} {'src@3':>5} {'src@3f':>6} {'rec@3':>5} {'src@10':>6} "
           f"{'hal@3':>5} {'hal@10':>6} {'psl@3':>5} {'psl@10':>6} {'fb':>3}")
     for item, s in zip(items, scores):
         rec = "  ·" if s["rec@3"] is None else f"{s['rec@3']:.2f}"
         fb = "err" if item.get("error") else ("ya" if item.get("rerank_fallback") else "")
-        print(f"{item['id']:7} {item['domain']:13} {item['kesulitan']:6} {fmt_flag(s['src@3']):>5} {rec:>5} "
+        print(f"{item['id']:7} {item['domain']:13} {item['kesulitan']:6} {fmt_flag(s['src@3']):>5} "
+              f"{fmt_flag(s['src@3f']):>6} {rec:>5} "
               f"{fmt_flag(s['src@10']):>6} {fmt_flag(s['hal@3']):>5} {fmt_flag(s['hal@10']):>6} "
               f"{fmt_flag(s['psl@3']):>5} {fmt_flag(s['psl@10']):>6} {fb:>3}")
-    print("  ✓ cocok  ✗ tidak cocok  · tidak dinilai   fb = rerank fallback")
+    print("  ✓ cocok  ✗ tidak cocok  · tidak dinilai   src@3f = FAISS top-3 tanpa rerank   fb = rerank fallback")
+
+
+def print_rerank_effect(items: list[dict[str, Any]], scores: list[dict[str, Any]]) -> None:
+    """hit@3 FAISS-only vs after rerank, and which questions rerank saved or hurt."""
+    print("\nRerank vs FAISS top-3 (tanpa rerank = candidates[:3], aturan pencocokan sama):")
+    for level in LEVELS:
+        pairs = [(i["id"], s[f"{level}@3f"], s[f"{level}@3"]) for i, s in zip(items, scores)
+                 if s[f"{level}@3"] is not None]
+        n = len(pairs)
+
+        def pct(k: int) -> str:
+            return f"{k}/{n} ({k / n * 100:.1f}%)" if n else "-"
+
+        saved = [i for i, faiss_ok, rerank_ok in pairs if rerank_ok and not faiss_ok]
+        hurt = [i for i, faiss_ok, rerank_ok in pairs if faiss_ok and not rerank_ok]
+        print(f"  {LEVEL_NAMES[level]:13}: FAISS-only {pct(sum(f for _, f, _ in pairs)):>15}"
+              f"   setelah rerank {pct(sum(r for _, _, r in pairs)):>15}")
+        print(f"  {'':15}diselamatkan rerank ({len(saved)}): {', '.join(saved) or '-'}")
+        print(f"  {'':15}dirugikan rerank    ({len(hurt)}): {', '.join(hurt) or '-'}")
 
 
 def print_summary(items: list[dict[str, Any]], scores: list[dict[str, Any]]) -> None:
     summary = summarise(items, scores)
-    cols = ["src@3", "rec@3", "src@10", "hal@3", "hal@10", "psl@3", "psl@10"]
+    cols = METRICS
     print("\nRingkasan (rata-rata atas pertanyaan yang dinilai; angka dalam kurung = jumlah dinilai)")
     print(f"  {'':22}" + "".join(f"{c:>13}" for c in cols))
     print(f"  {'SEMUA':22}" + "".join(f"{fmt_pct(summary['overall'][c]):>13}" for c in cols))
@@ -184,6 +207,8 @@ def print_summary(items: list[dict[str, Any]], scores: list[dict[str, Any]]) -> 
     for level in LEVELS:
         skipped = [i["id"] for i, s in zip(items, scores) if s[f"{level}@3"] is None]
         print(f"  {LEVEL_NAMES[level]:13}: {len(skipped):2d}  {', '.join(skipped) or '-'}")
+
+    print_rerank_effect(items, scores)
 
     print("\nKontribusi rerank (benar di top-10 FAISS, hilang di top-3):")
     for level in LEVELS:
@@ -303,7 +328,7 @@ def run_compare(deploy_items: list[dict[str, Any]], path: Path) -> None:
     theirs = [score_item(other_by_id[i["id"]], codes) for i in common]
     a, b = summarise(common, ours)["overall"], summarise(common, theirs)["overall"]
     print(f"  {'metrik':8} {'skripsi':>13} {'deploy':>13}")
-    for m in ("src@3", "rec@3", "src@10", "hal@3", "hal@10", "psl@3", "psl@10"):
+    for m in METRICS:
         print(f"  {m:8} {fmt_pct(b[m]):>13} {fmt_pct(a[m]):>13}")
     for level in LEVELS:
         worse = [i["id"] for i, x, y in zip(common, ours, theirs) if y[f"{level}@3"] and x[f"{level}@3"] is False]
