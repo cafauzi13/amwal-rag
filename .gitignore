@@ -1,8 +1,7 @@
 # Secrets
 .env
 
-# Data & artifacts
-data/
+# Build artifacts (rebuild with build_index.py)
 index/
 
 # Python
