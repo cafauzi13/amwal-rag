@@ -90,6 +90,17 @@ def _post(url: str, payload: dict[str, Any]) -> Any:
         attempt += 1
 
 
+def _pacing_delay(data: Any, batch: Sequence[str], elapsed: float, target_tpm: int) -> float:
+    """Pause needed before the next batch to stay under target_tpm (0 disables pacing)."""
+    if target_tpm <= 0:
+        return 0.0
+    usage = data.get("usage") if isinstance(data, dict) else None
+    tokens = usage.get("total_tokens") if isinstance(usage, dict) else None
+    if not isinstance(tokens, (int, float)):
+        tokens = sum(len(t) for t in batch) / 4  # rough estimate: ~4 chars per token
+    return max(tokens / target_tpm * 60 - elapsed, 0.0)
+
+
 def embed(
     texts: str | Sequence[str], task: Task, batch_size: int | None = None
 ) -> np.ndarray:
@@ -102,12 +113,18 @@ def embed(
     s = get_settings()
     size = batch_size or s.jina_embed_batch_size
     vectors: list[list[float]] = []
+    pause = 0.0
     for start in range(0, len(texts), size):
+        if pause > 0:
+            logger.info("Jina pacing: jeda %.1fs (target %d TPM)", pause, s.jina_target_tpm)
+            time.sleep(pause)
         batch = list(texts[start : start + size])
+        began = time.perf_counter()
         data = _post(
             EMBED_URL,
             {"model": s.jina_embed_model, "task": task, "input": batch, "truncate": True},
         )
+        pause = _pacing_delay(data, batch, time.perf_counter() - began, s.jina_target_tpm)
         try:
             items = sorted(data["data"], key=lambda d: d["index"])
             vectors.extend(item["embedding"] for item in items)
