@@ -89,7 +89,8 @@ Semua error memakai bentuk yang sama (termasuk error validasi):
 | 401 | `invalid_api_key` | Header `X-API-Key` tidak ada atau salah | Tidak |
 | 422 | `invalid_question` | `question` tidak ada, bukan string, atau di luar 3–500 karakter | Tidak |
 | 429 | `rate_limited` | Server sedang penuh (lihat *Batas request bersamaan*) | Ya, sekali |
-| 500 | `internal_error` | Error tak terduga di server | Tidak |
+| 404 / 405 | `not_found` / `method_not_allowed` | Path tidak ada / metode HTTP salah (mis. `GET /chat`) | Tidak |
+| 500 | `internal_error` | Error tak terduga di server, atau server belum dikonfigurasi (API key server kosong) | Tidak |
 | 503 | `upstream_unavailable` | Layanan AI (embedding/LLM) sedang tidak tersedia atau kuotanya habis | Ya, sekali |
 | 504 | `timeout` | Pemrosesan melebihi 60 detik | Tidak |
 

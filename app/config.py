@@ -62,6 +62,13 @@ class Settings:
     # HTTP
     http_timeout: float
 
+    # API server (app/main.py)
+    api_key: str
+    max_concurrent_requests: int
+    queue_wait_seconds: float
+    request_timeout_seconds: float
+    enable_docs: bool
+
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
@@ -87,4 +94,9 @@ def get_settings() -> Settings:
         retrieve_top_k=int(env("RETRIEVE_TOP_K", "10")),
         rerank_top_n=int(env("RERANK_TOP_N", "3")),
         http_timeout=float(env("HTTP_TIMEOUT", "30")),
+        api_key=env("API_KEY", "").strip(),
+        max_concurrent_requests=int(env("MAX_CONCURRENT_REQUESTS", "10")),
+        queue_wait_seconds=float(env("QUEUE_WAIT_SECONDS", "5")),
+        request_timeout_seconds=float(env("REQUEST_TIMEOUT_SECONDS", "60")),
+        enable_docs=env("ENABLE_DOCS", "false").strip().lower() in ("1", "true", "yes"),
     )
