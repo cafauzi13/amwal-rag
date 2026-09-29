@@ -1,0 +1,17 @@
+# Secrets
+.env
+
+# Data & artifacts
+data/
+index/
+
+# Python
+venv/
+.venv/
+__pycache__/
+*.pyc
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
