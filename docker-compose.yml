@@ -1,0 +1,32 @@
+# amwal-rag API.
+#   mkdir -p index                                                   # once, as the host user
+#   docker compose build
+#   docker compose run --rm api python -m scripts.build_index        # once (~5 min, Jina tokens)
+#   docker compose up -d
+#   curl http://127.0.0.1:8000/health
+services:
+  api:
+    build: .
+    image: amwal-rag:latest
+    env_file: .env
+    # Run as the host user so ./index (bind mount) is writable without chown.
+    # Set APP_UID/APP_GID in .env if `id -u` / `id -g` on the server are not 1000.
+    user: "${APP_UID:-1000}:${APP_GID:-1000}"
+    ports:
+      # localhost only: nginx on the host terminates HTTPS and proxies here
+      - "127.0.0.1:${HOST_PORT:-8000}:8000"
+    volumes:
+      - type: bind
+        source: ./index
+        target: /app/index
+        bind:
+          create_host_path: false  # fail fast instead of Docker creating a root-owned ./index
+    init: true
+    restart: unless-stopped
+    # uvicorn finishes in-flight requests on SIGTERM; one /chat can take up to ~65 s
+    stop_grace_period: 70s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

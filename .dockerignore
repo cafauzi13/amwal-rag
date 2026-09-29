@@ -1,0 +1,10 @@
+# Allowlist: only what the image needs. Everything else (.env, .venv, .git, index/,
+# tests/, data/cleaned/, data/eval/, ask.py, ...) never reaches the build context.
+*
+!requirements.lock
+!app/
+!scripts/
+!data/chunks.jsonl
+
+**/__pycache__
+**/*.pyc

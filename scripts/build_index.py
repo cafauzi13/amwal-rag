@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 import shutil
 import sys
 import time
@@ -96,11 +97,29 @@ class Checkpoint:
         shutil.rmtree(self.dir, ignore_errors=True)
 
 
+def ensure_writable(directory: Path) -> None:
+    """Create directory and prove we can write there, before spending any tokens."""
+    probe = directory / ".write_test"
+    try:
+        directory.mkdir(parents=True, exist_ok=True)
+        probe.write_text("ok", encoding="utf-8")
+        probe.unlink()
+    except PermissionError as exc:
+        uid = os.getuid() if hasattr(os, "getuid") else "?"
+        gid = os.getgid() if hasattr(os, "getgid") else "?"
+        raise BuildError(
+            f"Folder {directory} tidak bisa ditulis oleh proses ini (uid={uid}, gid={gid}). "
+            "Di Docker: pastikan ./index dibuat oleh user host (mkdir -p index) dan APP_UID/APP_GID "
+            "di .env sama dengan `id -u` / `id -g` user tersebut, atau: sudo chown -R "
+            f"{uid}:{gid} index"
+        ) from exc
+
+
 def build(limit: int | None, fresh: bool) -> int:
     started = time.perf_counter()
     s = get_settings()
     out_dir = INDEX_DIR / "sample" if limit is not None else INDEX_DIR
-    out_dir.mkdir(parents=True, exist_ok=True)
+    ensure_writable(out_dir)
 
     try:
         texts, metas, prefixed = load_chunks(CHUNKS_PATH, limit)
