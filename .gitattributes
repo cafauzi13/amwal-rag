@@ -1,0 +1,4 @@
+# Keep data files byte-for-byte as committed (no CRLF conversion on Windows checkouts):
+# index/build_info.json pins the SHA-256 of data/chunks.jsonl, so the bytes must match
+# on every machine that builds or serves the index.
+data/*.jsonl -text
