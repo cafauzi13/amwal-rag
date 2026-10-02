@@ -9,7 +9,7 @@ RAG chatbot ZISWAF untuk amwal.site: embed query (Jina) → FAISS top-10 → rer
 3. **Prompt sistem melarang Markdown:** `answer` harus teks polos (boleh baris baru), sudah berisi disclaimer, dan pertanyaan di luar ZISWAF ditolak dengan sopan (200, `sources: []`).
 4. **`/health` tidak memanggil API eksternal;** hanya cek indeks termuat (200 / 503).
 5. **`X-API-Key` wajib untuk `POST /chat`** (401 `invalid_api_key`); `/health` tanpa key. Tidak ada CORS — layanan dipanggil server-to-server.
-6. **Batas request bersamaan global:** `MAX_CONCURRENT_REQUESTS` di `.env` (default 10), dengan antrean singkat beberapa detik sebelum menolak dengan 429 `rate_limited`. Bukan pembatasan per IP (semua request datang dari satu backend).
+6. **Batas request bersamaan global:** `MAX_CONCURRENT_REQUESTS` di `.env` (default 5; diturunkan dari 10 karena Jina free tier membalas 429 untuk ±10 embed serentak), dengan antrean singkat beberapa detik sebelum menolak dengan 429 `rate_limited`. Bukan pembatasan per IP (semua request datang dari satu backend).
 7. **`X-Request-ID` dari klien** dipakai hanya bila ≤ 64 karakter dan hanya `[A-Za-z0-9-]`; selain itu buat ID baru. `request_id` ada di setiap response dan error.
 8. **Stateless, single-turn:** tidak menyimpan riwayat percakapan.
 

@@ -95,7 +95,7 @@ def get_settings() -> Settings:
         rerank_top_n=int(env("RERANK_TOP_N", "3")),
         http_timeout=float(env("HTTP_TIMEOUT", "30")),
         api_key=env("API_KEY", "").strip(),
-        max_concurrent_requests=int(env("MAX_CONCURRENT_REQUESTS", "10")),
+        max_concurrent_requests=int(env("MAX_CONCURRENT_REQUESTS", "5")),
         queue_wait_seconds=float(env("QUEUE_WAIT_SECONDS", "5")),
         request_timeout_seconds=float(env("REQUEST_TIMEOUT_SECONDS", "60")),
         enable_docs=env("ENABLE_DOCS", "false").strip().lower() in ("1", "true", "yes"),

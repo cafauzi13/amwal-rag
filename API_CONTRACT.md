@@ -96,7 +96,7 @@ Semua error memakai bentuk yang sama (termasuk error validasi):
 
 ## Batas request bersamaan
 
-Server memproses paling banyak `MAX_CONCURRENT_REQUESTS` request `/chat` sekaligus (default **10**, diatur lewat `.env` server). Batas ini **global**, bukan per IP. Request yang melebihi batas menunggu di antrean singkat (beberapa detik); bila tetap belum mendapat giliran, server membalas `429 rate_limited`.
+Server memproses paling banyak `MAX_CONCURRENT_REQUESTS` request `/chat` sekaligus (default **5**, diatur lewat `.env` server). Batas ini **global**, bukan per IP. Request yang melebihi batas menunggu di antrean singkat (beberapa detik); bila tetap belum mendapat giliran, server membalas `429 rate_limited`.
 
 ## Catatan integrasi
 
