@@ -19,7 +19,7 @@ File compose: [docker-compose.dokploy.yml](docker-compose.dokploy.yml). Indeks F
    ```bash
    python -m scripts.build_index
    ```
-   Butuh ±5 menit dan ±370 ribu token Jina. Isi `JINA_TARGET_TPM=0` bila key Jina tier berbayar, supaya lebih cepat. Untuk build pertama tidak perlu restart: request berikutnya langsung memuat indeks dan status menjadi `healthy`. Bila indeks dibangun ulang saat sudah termuat (`--fresh`), **restart service** sesudahnya.
+   Butuh ±5 menit dan ±370 ribu token Jina. Isi `JINA_TARGET_TPM=0` bila key Jina tier berbayar, supaya lebih cepat. Untuk build pertama tidak perlu restart: request berikutnya langsung memuat indeks dan status menjadi `healthy` (terbukti dalam uji lokal). Selama indeks belum ada, `/chat` membalas 503 `upstream_unavailable` tanpa memanggil Jina/DeepSeek. Bila indeks dibangun ulang saat sudah termuat (`--fresh`), **restart service** sesudahnya.
 5. **Panggil dari backend AMWAL:** `POST http://amwal-rag:8000/chat` dengan header `X-API-Key: <API_KEY>` dan body `{"question": "..."}`. Container backend **harus ikut di jaringan `dokploy-network`**. Timeout klien ≥ 70 detik; retry sekali hanya untuk 429/503 (detail di [API_CONTRACT.md](API_CONTRACT.md)).
 6. **Jangan hapus volume `amwal-rag-index`.** Redeploy tidak menyentuhnya; tanpa volume itu indeks harus dibangun ulang.
 
@@ -27,7 +27,7 @@ File compose: [docker-compose.dokploy.yml](docker-compose.dokploy.yml). Indeks F
 
 ## Belum diverifikasi tanpa Dokploy
 
-`docker-compose.dokploy.yml` sudah diuji dengan Docker Desktop (Docker 29.8.1, Compose v5.5.1) memakai jaringan bridge `dokploy-network` yang dibuat manual: build image, build indeks di named volume oleh user non-root (tanpa `chown`), status `healthy`, `/chat` dari container lain lewat `http://amwal-rag:8000` (200, dan 401 untuk key salah), serta indeks tetap ada setelah `down` lalu `up`. Hal-hal berikut hanya bisa dipastikan di server Dokploy:
+`docker-compose.dokploy.yml` sudah diuji dengan Docker Desktop (Docker 29.8.1, Compose v5.5.1) memakai jaringan bridge `dokploy-network` yang dibuat manual: build image, build indeks di named volume oleh user non-root (tanpa `chown`), status `healthy`, `/chat` dari container lain lewat `http://amwal-rag:8000` (200, dan 401 untuk key salah), indeks tetap ada setelah `down` lalu `up`, serta container yang berjalan tanpa indeks (`/health` 503, status `unhealthy`, `/chat` 503 tanpa panggilan API) berubah menjadi `healthy` dan melayani `/chat` begitu file indeks muncul di volume, tanpa restart. Hal-hal berikut hanya bisa dipastikan di server Dokploy:
 
 - **`env_file: .env` dari tab Environment.** Dokploy menulis variabel tab Environment ke file `.env` di samping file compose; bila tidak, container berjalan tanpa key (`/chat` 500, log startup menyebut `API_KEY belum diisi`).
 - **Randomize Compose / isolated deployment harus mati.** Bila menyala, Dokploy menambahkan akhiran pada nama service, volume, dan jaringan, sehingga alamat `amwal-rag` dan volume `amwal-rag-index` berubah.
