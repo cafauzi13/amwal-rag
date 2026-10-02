@@ -112,12 +112,26 @@ _lock = threading.Lock()
 
 
 def load_index() -> RagIndex:
-    """Return the cached index, loading it on first use. Failures are not cached, so a rebuild is picked up."""
+    """Return the cached index, loading it on first use. Failures are not cached, so a rebuild is picked up.
+
+    Any failure while loading (truncated faiss.index, bad JSON, unreadable file, ...) becomes
+    IndexNotReadyError, so /health and /chat answer 503 instead of 500. Only the error class is
+    logged; this path never sees a question.
+    """
     global _index
     if _index is None:
         with _lock:
             if _index is None:
-                _index = _load()
+                try:
+                    _index = _load()
+                except IndexNotReadyError:
+                    raise
+                except Exception as exc:  # noqa: BLE001 - index loading only, not the answer path
+                    logger.error("Gagal memuat indeks (%s)", type(exc).__name__)
+                    raise IndexNotReadyError(
+                        f"Indeks rusak atau tidak terbaca ({type(exc).__name__}). "
+                        "Jalankan: python -m scripts.build_index --fresh"
+                    ) from exc
     return _index
 
 
