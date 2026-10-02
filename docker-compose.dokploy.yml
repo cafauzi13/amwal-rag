@@ -1,0 +1,36 @@
+# amwal-rag for Dokploy (Compose service). Plain Docker / local use: docker-compose.yml.
+#
+# - No published ports: the AMWAL backend reaches it on the shared dokploy-network as
+#   http://amwal-rag:8000 (the service name is the DNS name; keep "Randomize Compose" off).
+# - The index lives in the named volume amwal-rag-index, because Dokploy wipes the repo
+#   folder on every deploy. Build it once from the container terminal:
+#     python -m scripts.build_index
+# - Runs as the image's non-root user app (uid 10001). A new, empty named volume inherits
+#   the owner of /app/index from the image, so the index is writable without chown.
+# - Healthcheck comes from the Dockerfile (/health; unhealthy until the index exists).
+services:
+  amwal-rag:
+    build: .
+    image: amwal-rag:latest
+    env_file: .env
+    volumes:
+      - amwal-rag-index:/app/index
+    networks:
+      - dokploy-network
+    init: true
+    restart: unless-stopped
+    # uvicorn finishes in-flight requests on SIGTERM; one /chat can take up to ~65 s
+    stop_grace_period: 70s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  dokploy-network:
+    external: true
+
+volumes:
+  amwal-rag-index:
+    name: amwal-rag-index  # fixed name: survives a renamed Compose project
